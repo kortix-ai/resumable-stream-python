@@ -4,6 +4,24 @@ A Python implementation of resumable streams using Redis as the backend.
 
 Heavily inspired by [vercel/resumable-stream](https://github.com/vercel/resumable-stream).
 
+## Installation
+
+### requirements.txt
+
+Add the following line to your requirements.txt
+
+```txt
+resumable-stream @ git+https://github.com/kortix-ai/resumable-stream-python@v0.0.1
+```
+
+### Poetry
+
+Add the following line to your pyproject.toml
+
+```toml
+resumable-stream = {git = "https://github.com/kortix-ai/resumable-stream-python", tag = "v0.0.1"}
+```
+
 ## Usage
 
 ```python
