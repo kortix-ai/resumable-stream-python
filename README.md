@@ -33,11 +33,8 @@ async def main():
     redis = Redis(host='localhost', port=6379, db=0)
     context = create_resumable_stream_context(redis, key_prefix="my-stream")
 
-    # Create a new stream
-    stream = await context.create_new_resumable_stream("my-stream-id", lambda: my_stream_generator())
-
-    # Or resume an existing stream
-    stream = await context.resume_existing_stream("my-stream-id")
+    # Get resumable stream
+    stream = await context.resumable_stream("my-stream-id", lambda: my_stream_generator())
 
     # Read from the stream
     async for chunk in stream:
