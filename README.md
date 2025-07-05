@@ -11,7 +11,7 @@ Heavily inspired by [vercel/resumable-stream](https://github.com/vercel/resumabl
 Add the following line to your requirements.txt
 
 ```txt
-resumable-stream @ git+https://github.com/kortix-ai/resumable-stream-python@v0.0.1
+resumable-stream @ git+https://github.com/kortix-ai/resumable-stream-python@main
 ```
 
 ### Poetry
@@ -19,7 +19,7 @@ resumable-stream @ git+https://github.com/kortix-ai/resumable-stream-python@v0.0
 Add the following line to your pyproject.toml
 
 ```toml
-resumable-stream = {git = "https://github.com/kortix-ai/resumable-stream-python", tag = "v0.0.1"}
+resumable-stream = { git = "https://github.com/kortix-ai/resumable-stream-python" }
 ```
 
 ## Usage
@@ -30,7 +30,7 @@ from redis.asyncio import Redis
 from resumable_stream.runtime import create_resumable_stream_context
 
 async def main():
-    redis = Redis(host='localhost', port=6379, db=0)
+    redis = Redis(host='localhost', port=6379, db=0, decode_responses=True)
     context = create_resumable_stream_context(redis, key_prefix="my-stream")
 
     # Get resumable stream

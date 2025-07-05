@@ -70,7 +70,7 @@ def create_resumable_stream_context(
             state = await ctx.redis.get(f"{ctx.key_prefix}:sentinel:{stream_id}")
             if not state:
                 return None
-            if state.decode() == DONE_VALUE:
+            if state == DONE_VALUE:
                 return None
             return await resume_stream(ctx, stream_id, skip_characters)
 
@@ -164,7 +164,7 @@ async def create_new_resumable_stream(
             try:
                 async for message in pubsub.listen():
                     if message["type"] == "message":
-                        await handle_message(message["data"].decode())
+                        await handle_message(message["data"])
             except asyncio.CancelledError:
                 return
 
@@ -247,16 +247,16 @@ async def resume_stream(
                 try:
                     async for message in pubsub.listen():
                         if message["type"] == "message":
-                            debug_log("Received message", message["data"].decode())
+                            debug_log("Received message", message["data"])
                             timeout_task.cancel()
 
-                            if message["data"].decode() == DONE_MESSAGE:
+                            if message["data"] == DONE_MESSAGE:
                                 await pubsub.unsubscribe(
                                     f"{ctx.key_prefix}:chunk:{listener_id}"
                                 )
                                 return
 
-                            yield message["data"].decode()
+                            yield message["data"]
                 except asyncio.CancelledError:
                     val = await ctx.redis.get(f"{ctx.key_prefix}:sentinel:{stream_id}")
                     if val == DONE_VALUE:

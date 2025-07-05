@@ -11,7 +11,7 @@ from typing import AsyncGenerator, List, Any
 
 @pytest_asyncio.fixture
 async def redis() -> AsyncGenerator[Redis, None]:
-    redis = Redis(host="localhost", port=6379, db=0)
+    redis = Redis(host="localhost", port=6379, db=0, decode_responses=True)
     yield redis
     keys = redis.scan_iter("test-resumable-stream:*")
     async for key in keys:
