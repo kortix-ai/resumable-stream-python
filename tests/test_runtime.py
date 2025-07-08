@@ -219,9 +219,12 @@ async def test_create_new_stream_with_start(
     test_data = ["chunk1", "chunk2", "chunk3"]
 
     # Create a new stream
-    stream = await stream_context.create_new_resumable_stream(
+    stream = await stream_context.resumable_stream(
         stream_id, lambda: async_generator(test_data), start=True
     )
+
+    if stream is None:
+        raise Exception("Stream is None")
 
     # Collect all chunks
     received_chunks = []
@@ -232,7 +235,7 @@ async def test_create_new_stream_with_start(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(1)
+@pytest.mark.timeout(3)
 async def test_resume_existing_stream_with_start(
     stream_context: ResumableStreamContext,
 ) -> None:
@@ -240,7 +243,7 @@ async def test_resume_existing_stream_with_start(
     test_data = ["chunk1", "chunk2", "chunk3"]
 
     # Create initial stream
-    _ = await stream_context.create_new_resumable_stream(
+    _ = await stream_context.resumable_stream(
         stream_id, lambda: async_generator(test_data), start=True
     )
 

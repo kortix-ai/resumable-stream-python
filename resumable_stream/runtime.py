@@ -1,7 +1,7 @@
 """
 Resumable Stream Runtime
 
-This module provides a Redis-backed resumable streaming system that allows clients to 
+This module provides a Redis-backed resumable streaming system that allows clients to
 create, pause, and resume async streams with persistence. It supports multiple consumers
 and handles connection failures gracefully.
 
@@ -19,20 +19,21 @@ Example:
     import asyncio
     from redis.asyncio import Redis
     from resumable_stream.runtime import create_resumable_stream_context
-    
+
     async def main():
         redis = Redis()
         ctx = create_resumable_stream_context(redis)
-        
+
         async def sample_stream():
             for i in range(10):
                 yield f"chunk {i}\n"
-        
-        stream = await ctx.resumable_stream("test-stream", sample_stream)
+
+        stream = await ctx.resumable_stream("test-stream", sample_stream, start=True)
         if stream:
             async for chunk in stream:
                 print(chunk, end='')
 """
+
 import asyncio
 import json
 import uuid
@@ -58,20 +59,20 @@ DONE_VALUE = "DONE"
 class StreamBroadcaster:
     """
     Broadcasts a single async stream to multiple consumers using queues.
-    
+
     This class allows one source stream to be consumed by multiple clients
     simultaneously. Each consumer gets its own queue and receives all chunks
     from the source stream.
-    
+
     Attributes:
         source: The source async iterator to broadcast from
         queues: List of queues for each consumer
     """
-    
+
     def __init__(self, source: AsyncIterator[str]):
         """
         Initialize the broadcaster with a source stream.
-        
+
         Args:
             source: The async iterator to broadcast from
         """
@@ -81,7 +82,7 @@ class StreamBroadcaster:
     def add_consumer(self) -> asyncio.Queue[str]:
         """
         Add a new consumer queue to receive broadcasted chunks.
-        
+
         Returns:
             A new queue that will receive all chunks from the source stream
         """
@@ -92,7 +93,7 @@ class StreamBroadcaster:
     async def start(self) -> None:
         """
         Start broadcasting the source stream to all consumer queues.
-        
+
         This method consumes the source stream and puts each chunk into all
         consumer queues. When the source is exhausted, it sends None to all
         queues to signal completion.
@@ -107,10 +108,10 @@ class StreamBroadcaster:
     async def queue_to_stream(queue: asyncio.Queue[str]) -> AsyncIterator[str]:
         """
         Convert a queue back into an async iterator stream.
-        
+
         Args:
             queue: The queue to convert to a stream
-            
+
         Yields:
             str: Chunks from the queue until None is received
         """
@@ -124,7 +125,7 @@ class StreamBroadcaster:
     async def iterate_bg(queue: asyncio.Queue[str]) -> None:
         """
         Background task to iterate through a queue for debugging purposes.
-        
+
         Args:
             queue: The queue to iterate through
         """
@@ -139,15 +140,15 @@ class StreamBroadcaster:
 class CreateResumableStreamContext:
     """
     Context object containing Redis connection and configuration for resumable streams.
-    
+
     This class holds the shared state needed for all resumable stream operations,
     including the Redis connection and key prefix for namespacing.
-    
+
     Attributes:
         key_prefix: Redis key prefix for this context
         redis: Redis connection instance
     """
-    
+
     def __init__(
         self,
         key_prefix: str,
@@ -155,7 +156,7 @@ class CreateResumableStreamContext:
     ):
         """
         Initialize the resumable stream context.
-        
+
         Args:
             key_prefix: Prefix for Redis keys to namespace this context
             redis: Redis connection instance
@@ -167,7 +168,7 @@ class CreateResumableStreamContext:
 class ResumableStreamContext(Protocol):
     """
     Protocol interface for resumable stream context implementations.
-    
+
     This protocol defines the public interface for creating and managing
     resumable streams. Implementations should provide methods for creating
     new streams, resuming existing ones, and handling both scenarios.
@@ -178,15 +179,17 @@ class ResumableStreamContext(Protocol):
         stream_id: str,
         make_stream: Callable[[], AsyncIterator[str]],
         skip_characters: Optional[int] = None,
+        start: bool = True,
     ) -> AsyncIterator[str] | None:
         """
         Create a new resumable stream or resume an existing one.
-        
+
         Args:
             stream_id: Unique identifier for the stream
             make_stream: Function that creates the source stream
             skip_characters: Number of characters to skip when resuming
-            
+            start: Whether to immediately start the stream with broadcasting. This starts the stream in the background.
+
         Returns:
             AsyncIterator[str] | None: The stream iterator or None if stream is done
         """
@@ -199,11 +202,11 @@ class ResumableStreamContext(Protocol):
     ) -> AsyncIterator[str] | None:
         """
         Resume an existing stream from where it left off.
-        
+
         Args:
             stream_id: Unique identifier for the stream
             skip_characters: Number of characters to skip when resuming
-            
+
         Returns:
             AsyncIterator[str] | None: The stream iterator or None if not found/done
         """
@@ -214,17 +217,17 @@ class ResumableStreamContext(Protocol):
         stream_id: str,
         make_stream: Callable[[], AsyncIterator[str]],
         skip_characters: Optional[int] = None,
-        start: bool = False,
+        start: bool = True,
     ) -> AsyncIterator[str]:
         """
         Create a new resumable stream.
-        
+
         Args:
             stream_id: Unique identifier for the stream
             make_stream: Function that creates the source stream
             skip_characters: Number of characters to skip (for consistency)
-            start: Whether to immediately start the stream with broadcasting
-            
+            start: Whether to immediately start the stream with broadcasting. This starts the stream in the background.
+
         Returns:
             AsyncIterator[str]: The new stream iterator
         """
@@ -237,15 +240,15 @@ def create_resumable_stream_context(
 ) -> ResumableStreamContext:
     """
     Factory function to create a resumable stream context.
-    
+
     This function creates a context that can be used to create and manage
     resumable streams. The context handles Redis connections and provides
     a clean interface for stream operations.
-    
+
     Args:
         redis: Redis connection instance
         key_prefix: Prefix for Redis keys (default: "resumable-stream")
-        
+
     Returns:
         ResumableStreamContext: A context object for managing resumable streams
     """
@@ -256,7 +259,7 @@ def create_resumable_stream_context(
 
     class ResumableStreamContextImpl:
         """Implementation of the ResumableStreamContext protocol."""
-        
+
         async def resume_existing_stream(
             self,
             stream_id: str,
@@ -264,11 +267,11 @@ def create_resumable_stream_context(
         ) -> AsyncIterator[str] | None:
             """
             Resume an existing stream from where it left off.
-            
+
             Args:
                 stream_id: Unique identifier for the stream
                 skip_characters: Number of characters to skip when resuming
-                
+
             Returns:
                 AsyncIterator[str] | None: The stream iterator or None if not found/done
             """
@@ -288,13 +291,12 @@ def create_resumable_stream_context(
         ) -> AsyncIterator[str]:
             """
             Create a new resumable stream.
-            
+
             Args:
                 stream_id: Unique identifier for the stream
                 make_stream: Function that creates the source stream
                 skip_characters: Number of characters to skip (for consistency)
                 start: Whether to immediately start the stream with broadcasting. This starts the stream in the background.
-                
             Returns:
                 AsyncIterator[str]: The new stream iterator
             """
@@ -307,31 +309,25 @@ def create_resumable_stream_context(
                 ctx,
                 stream_id,
                 make_stream,
+                start,
             )
-            if not start:
-                return stream
-
-            debug_log("Starting broadcaster")
-            broadcaster = StreamBroadcaster(stream)
-            queue = broadcaster.add_consumer()
-            asyncio.create_task(broadcaster.start())
-            debug_log("Broadcaster started")
-            return broadcaster.queue_to_stream(queue)
+            return stream
 
         async def resumable_stream(
             self,
             stream_id: str,
             make_stream: Callable[[], AsyncIterator[str]],
             skip_characters: Optional[int] = None,
+            start: bool = True,
         ) -> AsyncIterator[str] | None:
             """
             Create a new resumable stream or resume an existing one.
-            
+
             Args:
                 stream_id: Unique identifier for the stream
                 make_stream: Function that creates the source stream
                 skip_characters: Number of characters to skip when resuming
-                
+
             Returns:
                 AsyncIterator[str] | None: The stream iterator or None if stream is done
             """
@@ -340,6 +336,7 @@ def create_resumable_stream_context(
                 stream_id,
                 make_stream,
                 skip_characters,
+                start,
             )
 
     return ResumableStreamContextImpl()
@@ -353,17 +350,17 @@ async def resume_existing_stream(
 ) -> AsyncIterator[str] | None:
     """
     Resume an existing stream after waiting for initialization.
-    
+
     This function waits for an initialization promise to complete before
     attempting to resume a stream. It checks if the stream exists and
     isn't already complete.
-    
+
     Args:
         init_promise: Promise to wait for before resuming
         ctx: The resumable stream context
         stream_id: Unique identifier for the stream
         skip_characters: Number of characters to skip when resuming
-        
+
     Returns:
         AsyncIterator[str] | None: The stream iterator or None if not found/done
     """
@@ -380,22 +377,23 @@ async def create_new_resumable_stream(
     ctx: CreateResumableStreamContext,
     stream_id: str,
     make_stream: Callable[[], AsyncIterator[str]],
+    start: bool = True,
 ) -> AsyncIterator[str]:
     """
     Create a new resumable stream that can be resumed later.
-    
+
     This function creates a new stream that automatically stores chunks in memory
     and publishes them to Redis for resumption. It handles multiple listeners
     and manages cleanup when the stream completes.
-    
+
     Args:
         ctx: The resumable stream context
         stream_id: Unique identifier for the stream
         make_stream: Function that creates the source stream
-        
+        start: Whether to immediately start the stream with broadcasting. This starts the stream in the background.
     Returns:
         AsyncIterator[str]: The new resumable stream iterator
-        
+
     Raises:
         Exception: If Redis operations fail or stream creation errors occur
     """
@@ -411,7 +409,7 @@ async def create_new_resumable_stream(
         async def handle_message(message: str):
             """
             Handle incoming listener connection requests.
-            
+
             Args:
                 message: JSON message with listener ID and skip characters
             """
@@ -452,7 +450,7 @@ async def create_new_resumable_stream(
         async def stream_generator():
             """
             Generate the stream while handling persistence and broadcasting.
-            
+
             Yields:
                 str: Chunks from the source stream
             """
@@ -503,7 +501,15 @@ async def create_new_resumable_stream(
                 await pubsub.unsubscribe(f"{ctx.key_prefix}:request:{stream_id}")
                 raise
 
-        return stream_generator()
+        stream = stream_generator()
+        if not start:
+            return stream
+
+        broadcaster = StreamBroadcaster(stream)
+        queue = broadcaster.add_consumer()
+        asyncio.create_task(broadcaster.start())
+        return broadcaster.queue_to_stream(queue)
+
     except Exception:
         # Clean up on any error
         if message_handler_task:
@@ -519,19 +525,19 @@ async def resume_stream(
 ) -> AsyncIterator[str] | None:
     """
     Resume a stream from a specific point by connecting as a listener.
-    
+
     This function connects to an existing stream by subscribing to its chunks
     and requesting to start from a specific character offset. It handles
     timeouts and connection issues gracefully.
-    
+
     Args:
         ctx: The resumable stream context
         stream_id: Unique identifier for the stream
         skip_characters: Number of characters to skip when resuming
-        
+
     Returns:
         AsyncIterator[str] | None: The resumed stream iterator
-        
+
     Raises:
         TimeoutError: If the stream doesn't respond within the timeout period
         Exception: If Redis operations fail
@@ -545,10 +551,10 @@ async def resume_stream(
         async def stream_generator():
             """
             Generate the resumed stream from Redis pub/sub messages.
-            
+
             Yields:
                 str: Chunks received from the stream
-                
+
             Raises:
                 TimeoutError: If timeout exceeded waiting for stream response
             """
@@ -605,20 +611,21 @@ async def create_resumable_stream(
     stream_id: str,
     make_stream: Callable[[], AsyncIterator[str]],
     skip_characters: Optional[int] = None,
+    start: bool = True,
 ) -> AsyncIterator[str] | None:
     """
     Create a resumable stream or resume an existing one based on current state.
-    
+
     This is the main entry point for stream operations. It checks if a stream
     already exists and decides whether to create a new one or resume an existing
     one based on the current listener count.
-    
+
     Args:
         ctx: The resumable stream context
         stream_id: Unique identifier for the stream
         make_stream: Function that creates the source stream
         skip_characters: Number of characters to skip when resuming
-        
+        start: Whether to immediately start the stream with broadcasting. This starts the stream in the background.
     Returns:
         AsyncIterator[str] | None: The stream iterator or None if stream is done
     """
@@ -631,24 +638,24 @@ async def create_resumable_stream(
         return None
     if isinstance(current_listener_count, int) and current_listener_count > 1:
         return await resume_stream(ctx, stream_id, skip_characters)
-    return await create_new_resumable_stream(ctx, stream_id, make_stream)
+    return await create_new_resumable_stream(ctx, stream_id, make_stream, start)
 
 
 async def incr_or_done(publisher: Redis, key: str) -> Union[str, int]:
     """
     Increment a Redis key or return DONE_VALUE if the key contains a non-integer.
-    
+
     This function attempts to increment a Redis key atomically. If the key
     contains a non-integer value (like DONE_VALUE), it returns that value
     instead of raising an exception.
-    
+
     Args:
         publisher: Redis connection instance
         key: The Redis key to increment
-        
+
     Returns:
         Union[str, int]: The incremented value or DONE_VALUE if not an integer
-        
+
     Raises:
         Exception: If Redis operation fails for reasons other than type mismatch
     """
@@ -664,11 +671,11 @@ async def incr_or_done(publisher: Redis, key: str) -> Union[str, int]:
 def debug_log(*messages: Any) -> None:
     """
     Log debug messages if DEBUG environment variable is set.
-    
+
     This function provides conditional debug logging that can be enabled
     by setting the DEBUG environment variable. It prints all provided
     messages to stdout.
-    
+
     Args:
         *messages: Variable number of messages to log
     """
