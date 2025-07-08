@@ -208,3 +208,49 @@ async def test_done_stream_returns_none(stream_context: ResumableStreamContext) 
 
     assert resumed_stream is None
     assert "".join(received_chunks) == "".join(test_data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(1)
+async def test_create_new_stream_with_start(
+    stream_context: ResumableStreamContext,
+) -> None:
+    stream_id = "test-stream-9"
+    test_data = ["chunk1", "chunk2", "chunk3"]
+
+    # Create a new stream
+    stream = await stream_context.create_new_resumable_stream(
+        stream_id, lambda: async_generator(test_data), start=True
+    )
+
+    # Collect all chunks
+    received_chunks = []
+    async for chunk in stream:
+        received_chunks.append(chunk)
+
+    assert "".join(received_chunks) == "".join(test_data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(1)
+async def test_resume_existing_stream_with_start(
+    stream_context: ResumableStreamContext,
+) -> None:
+    stream_id = "test-stream-10"
+    test_data = ["chunk1", "chunk2", "chunk3"]
+
+    # Create initial stream
+    _ = await stream_context.create_new_resumable_stream(
+        stream_id, lambda: async_generator(test_data), start=True
+    )
+
+    # Resume the stream
+    resumed_stream = await stream_context.resume_existing_stream(stream_id)
+    assert resumed_stream is not None
+
+    # Collect remaining chunks
+    received_chunks = []
+    async for chunk in resumed_stream:
+        received_chunks.append(chunk)
+
+    assert "".join(received_chunks) == "".join(test_data)

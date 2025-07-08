@@ -18,6 +18,44 @@ DONE_MESSAGE = "\n\n\nDONE_SENTINEL_hasdfasudfyge374%$%^$EDSATRTYFtydryrte\n"
 DONE_VALUE = "DONE"
 
 
+# Create stream broadcaster for multiple consumers
+class StreamBroadcaster:
+    def __init__(self, source: AsyncIterator[str]):
+        self.source = source
+        self.queues: List[asyncio.Queue[str | None]] = []
+
+    def add_consumer(self) -> asyncio.Queue[str]:
+        q: asyncio.Queue = asyncio.Queue()
+        self.queues.append(q)
+        return q
+
+    async def start(self) -> None:
+        async for chunk in self.source:
+            for q in self.queues:
+                await q.put(chunk)
+        for q in self.queues:
+            await q.put(None)  # Sentinel to close consumers
+
+    # Consumer wrapper as an async generator
+    @staticmethod
+    async def queue_to_stream(queue: asyncio.Queue[str]) -> AsyncIterator[str]:
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield chunk
+
+    # Print consumer task
+    @staticmethod
+    async def iterate_bg(queue: asyncio.Queue[str]) -> None:
+        debug_log("Broadcaster started")
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            debug_log("Broadcaster received chunk", chunk)
+
+
 class CreateResumableStreamContext:
     def __init__(
         self,
@@ -49,6 +87,7 @@ class ResumableStreamContext(Protocol):
         stream_id: str,
         make_stream: Callable[[], AsyncIterator[str]],
         skip_characters: Optional[int] = None,
+        start: bool = False,
     ) -> AsyncIterator[str]: ...
 
 
@@ -79,17 +118,27 @@ def create_resumable_stream_context(
             stream_id: str,
             make_stream: Callable[[], AsyncIterator[str]],
             skip_characters: Optional[int] = None,
+            start: bool = False,
         ) -> AsyncIterator[str]:
             await ctx.redis.set(
                 f"{ctx.key_prefix}:sentinel:{stream_id}",
                 "1",
                 ex=24 * 60 * 60,
             )
-            return await create_new_resumable_stream(
+            stream = await create_new_resumable_stream(
                 ctx,
                 stream_id,
                 make_stream,
             )
+            if not start:
+                return stream
+
+            debug_log("Starting broadcaster")
+            broadcaster = StreamBroadcaster(stream)
+            queue = broadcaster.add_consumer()
+            asyncio.create_task(broadcaster.start())
+            debug_log("Broadcaster started")
+            return broadcaster.queue_to_stream(queue)
 
         async def resumable_stream(
             self,
