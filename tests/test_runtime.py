@@ -6,6 +6,7 @@ from resumable_stream import (
     create_resumable_stream_context,
     ResumableStreamContext,
 )
+from resumable_stream.runtime import incr_or_done, DONE_VALUE
 from typing import AsyncGenerator, List, Any
 
 
@@ -28,6 +29,115 @@ async def async_generator(items: List[str]) -> AsyncGenerator[str, None]:
     for item in items:
         await asyncio.sleep(0.1)
         yield item
+
+
+@pytest.mark.asyncio
+async def test_incr_or_done_new_key(redis: Redis) -> None:
+    """Test incr_or_done with a new key that doesn't exist."""
+    key = "test-incr-new"
+    
+    # Ensure key doesn't exist
+    await redis.delete(key)
+    
+    result = await incr_or_done(redis, key)
+    assert result == 1
+    
+    # Verify the key was actually set
+    value = await redis.get(key)
+    assert value == "1"
+    
+    # Clean up
+    await redis.delete(key)
+
+
+@pytest.mark.asyncio
+async def test_incr_or_done_existing_integer(redis: Redis) -> None:
+    """Test incr_or_done with an existing integer key."""
+    key = "test-incr-existing"
+    
+    # Set initial value
+    await redis.set(key, "5")
+    
+    result = await incr_or_done(redis, key)
+    assert result == 6
+    
+    # Verify the key was incremented
+    value = await redis.get(key)
+    assert value == "6"
+    
+    # Test incrementing again
+    result = await incr_or_done(redis, key)
+    assert result == 7
+    
+    # Clean up
+    await redis.delete(key)
+
+
+@pytest.mark.asyncio
+async def test_incr_or_done_with_done_value(redis: Redis) -> None:
+    """Test incr_or_done with a key containing DONE_VALUE."""
+    key = "test-incr-done"
+    
+    # Set key to DONE_VALUE
+    await redis.set(key, DONE_VALUE)
+    
+    result = await incr_or_done(redis, key)
+    assert result == DONE_VALUE
+    
+    # Verify the key value is unchanged
+    value = await redis.get(key)
+    assert value == DONE_VALUE
+    
+    # Clean up
+    await redis.delete(key)
+
+
+@pytest.mark.asyncio
+async def test_incr_or_done_with_non_integer_string(redis: Redis) -> None:
+    """Test incr_or_done with a key containing a non-integer string."""
+    key = "test-incr-string"
+    
+    # Set key to a non-integer string
+    await redis.set(key, "not-a-number")
+    
+    result = await incr_or_done(redis, key)
+    assert result == DONE_VALUE
+    
+    # Verify the key value is unchanged
+    value = await redis.get(key)
+    assert value == "not-a-number"
+    
+    # Clean up
+    await redis.delete(key)
+
+
+@pytest.mark.asyncio
+async def test_incr_or_done_multiple_increments(redis: Redis) -> None:
+    """Test multiple increments to verify the function works consistently."""
+    key = "test-incr-multiple"
+    
+    # Clean start
+    await redis.delete(key)
+    
+    # First increment (key doesn't exist)
+    result1 = await incr_or_done(redis, key)
+    assert result1 == 1
+    
+    # Second increment 
+    result2 = await incr_or_done(redis, key)
+    assert result2 == 2
+    
+    # Third increment
+    result3 = await incr_or_done(redis, key)
+    assert result3 == 3
+    
+    # Now set it to DONE and verify behavior changes
+    await redis.set(key, DONE_VALUE)
+    result4 = await incr_or_done(redis, key)
+    assert result4 == DONE_VALUE
+    
+    # Clean up
+    await redis.delete(key)
 
 
 @pytest.mark.asyncio
@@ -257,3 +367,42 @@ async def test_resume_existing_stream_with_start(
         received_chunks.append(chunk)
 
     assert "".join(received_chunks) == "".join(test_data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(5)
+async def test_timeout_and_connection_closure(stream_context: ResumableStreamContext, redis: Redis) -> None:
+    """Test that pubsub connections are properly cleaned up when timeout occurs during stream resumption."""
+    
+    stream_id = "test-timeout-stream"
+    
+    # Set up a stream state that exists but has no active publisher
+    # This simulates a scenario where a stream was created but the publisher died
+    await redis.set(f"test-resumable-stream:rs:sentinel:{stream_id}", "2", ex=24*60*60)
+    
+    # Try to resume the stream - this should timeout because no publisher is responding
+    # The internal timeout in resume_stream is 1 second
+    with pytest.raises(TimeoutError, match="Timeout waiting for ack"):
+        resumed_stream = await stream_context.resume_existing_stream(stream_id)
+        if resumed_stream:
+            # Try to consume the stream - this should trigger the timeout
+            chunks = []
+            async for chunk in resumed_stream:
+                chunks.append(chunk)
+    
+    # After the timeout, verify that the Redis state is still intact
+    # (timeout shouldn't corrupt the stream state)
+    state = await redis.get(f"test-resumable-stream:rs:sentinel:{stream_id}")
+    assert state == "2"  # Should still be "2", not "DONE"
+    
+    # Verify that no pubsub channels are leaked by checking active channels
+    # This tests the resource cleanup aspect
+    pubsub_channels = await redis.execute_command("PUBSUB", "CHANNELS", "test-resumable-stream:rs:*")
+    
+    # There should be no active channels for our test stream after timeout cleanup
+    if pubsub_channels:
+        timeout_related_channels = [ch for ch in pubsub_channels if stream_id in str(ch)]
+        assert len(timeout_related_channels) == 0, f"Found leaked channels: {timeout_related_channels}"
+    
+    # Clean up
+    await redis.delete(f"test-resumable-stream:rs:sentinel:{stream_id}")

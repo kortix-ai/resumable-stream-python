@@ -500,6 +500,12 @@ async def create_new_resumable_stream(
                     message_handler_task.cancel()
                 await pubsub.unsubscribe(f"{ctx.key_prefix}:request:{stream_id}")
                 raise
+            finally:
+                if message_handler_task:
+                    message_handler_task.cancel()
+                await pubsub.unsubscribe(f"{ctx.key_prefix}:request:{stream_id}")
+                await pubsub.aclose()
+
 
         stream = stream_generator()
         if not start:
@@ -515,6 +521,7 @@ async def create_new_resumable_stream(
         if message_handler_task:
             message_handler_task.cancel()
         await pubsub.unsubscribe(f"{ctx.key_prefix}:request:{stream_id}")
+        await pubsub.aclose()
         raise
 
 
@@ -560,14 +567,50 @@ async def resume_stream(
             """
             try:
                 debug_log("STARTING STREAM", stream_id, listener_id)
-                start = asyncio.get_event_loop().time()
+                first_message_received = False
+                
+                async def get_first_message():
+                    """Get the first actual message from pubsub"""
+                    async for message in pubsub.listen():
+                        if message["type"] == "message":
+                            return message
+                
+                # Race the first message against a timeout
+                get_message_task = asyncio.create_task(get_first_message())
                 timeout_task = asyncio.create_task(asyncio.sleep(1.0))
-
+                
                 try:
+                    done, pending = await asyncio.wait(
+                        [get_message_task, timeout_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    
+                    # Cancel pending tasks
+                    for task in pending:
+                        task.cancel()
+                    
+                    if timeout_task in done:
+                        # Timeout occurred
+                        raise TimeoutError("Timeout waiting for ack")
+                    
+                    # We got the first message
+                    first_message = get_message_task.result()
+                    if first_message is None:
+                        raise TimeoutError("Timeout waiting for ack")
+                        
+                    debug_log("Received message", first_message["data"])
+                    
+                    if first_message["data"] == DONE_MESSAGE:
+                        await pubsub.unsubscribe(f"{ctx.key_prefix}:chunk:{listener_id}")
+                        return
+                    
+                    yield first_message["data"]
+                    first_message_received = True
+                    
+                    # Continue listening for remaining messages (no timeout needed)
                     async for message in pubsub.listen():
                         if message["type"] == "message":
                             debug_log("Received message", message["data"])
-                            timeout_task.cancel()
 
                             if message["data"] == DONE_MESSAGE:
                                 await pubsub.unsubscribe(
@@ -576,17 +619,23 @@ async def resume_stream(
                                 return
 
                             yield message["data"]
+                            
                 except asyncio.CancelledError:
                     val = await ctx.redis.get(f"{ctx.key_prefix}:sentinel:{stream_id}")
                     if val == DONE_VALUE:
                         return
-                    if asyncio.get_event_loop().time() - start > 1.0:
+                    if not first_message_received:
                         raise TimeoutError("Timeout waiting for ack")
+                    raise
                 finally:
                     await pubsub.unsubscribe(f"{ctx.key_prefix}:chunk:{listener_id}")
+                    
             except Exception as e:
                 debug_log("Error in resume_stream", e)
                 raise
+            finally:
+                await pubsub.aclose()
+
 
         # Start the stream and send the request
         stream = stream_generator()
@@ -602,7 +651,7 @@ async def resume_stream(
 
         return stream
     except Exception:
-        await pubsub.unsubscribe(f"{ctx.key_prefix}:chunk:{listener_id}")
+        await pubsub.aclose()
         raise
 
 
@@ -663,7 +712,7 @@ async def incr_or_done(publisher: Redis, key: str) -> Union[str, int]:
         return await publisher.incr(key)
     except Exception as reason:
         error_string = str(reason)
-        if "ERR value is not an integer or out of range" in error_string:
+        if "value is not an integer or out of range" in error_string:
             return DONE_VALUE
         raise
 
